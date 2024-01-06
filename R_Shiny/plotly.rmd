@@ -1,0 +1,1092 @@
+---
+title: "prr - Mini-Challenge, "
+author: "Yannic Lais, Janis Frölich, Manuel Schwarz, Raphael Strebel, HS22"
+date: "`r format(Sys.time(), '%B %Y')`"
+output:
+  html_document:
+    number_sections: true
+    toc: true
+    toc_depth: 4
+    df_print: paged
+    toc_float: true
+    theme: simplex
+    highlight: haddock
+  pdf_document:
+    toc: yes
+    toc_depth: 3
+  html_notebook:
+    number_sections: true
+    toc: true
+    toc_depth: 4
+    toc_float: true
+    theme: simplex
+    highlight: haddock
+---
+
+# Covid-19, Plotly & Shiny
+
+## Einführung
+Zum Abschluss des Moduls PRR muss ein R-Notebook erstellt werden, welche eine Fragestellung bearbeitet und dabei zwei technische Themen (Libraries) in den Fokus setzt.
+
+In folgendem Notebook werden weltweite Corona-Fallzahlen der letzten zwei Jahre untersucht und anschliessend in einem Dashboard dargsestellt. Fokus sind Visualisierungen mit Plotly und das Erstellen einer einfachen Applikation mit R Shiny.
+
+### Plotly
+Plotly ist eine Visualisierungs-Library für R und Python. Sie bietet die Möglichkeit, interaktive Plots zu erstellen. Vor allem bei der Datenanalyse ist dies ein grosser Vorteil, da die Daten explorativ untersucht werden können.
+
+Dabei gibt es neben der Möglichkeit, direkt eine Visualisierung mit Plotly zu erstellen, auch die Möglichkeit, eine ggplot-Grafik zu einer Plotly-Grafik umzuwandeln. In dieser Mini-Challenge werden beide Varianten ausprobiert und deren Vor- und Nachteile erläutert. 
+
+Weiter stellen wir im Kontext von Plotly noch kurz die Library 'esquisse' vor, mit welcher einfach und intuitiv mittels eines Interfaces ggplot2-Grafiken erzeugt werden können.
+
+### Shiny
+
+Mit dem Package Shiny haben R Programmierer die Möglichkeit R Markdown Files mit interaktiven Userinputs zu versehen oder ein eigenständiges Dashboard / Webapplikation zu entwerfen. Der R-Code ist in beiden Fällen fast identisch, je nach Anwendungsfall kann entschieden werden was bevorzugt wird. Für einen Daten Explorativen Ansatz kann es helfen, die Daten anhand von Userinputs zu filtern und zu visualisieren. Um die Resultate und Erkenntnisse nachvollziehbar zu dokumentieren, scheint ein schrittweiser Aufbau eines Notebooks jedoch sinnvoller.   
+Daher haben wir für unserer Challenge eine Webapplikation entworfen. Sie fasst die wichtigsten Erkenntnisse aus den Covid-19 Daten zusammen. Für Interessierte besteht zudem die Möglichkeit die Fallzahlen nach Land und Zeitraum zu filtern. 
+
+
+### Verwendete Daten
+In dieser Mini-Challenge werden wir Daten über den Verlauf der Verbreitung des Corona-Virus und den Impfungen dagegen anschauen. Dabei stehen uns drei Datensätze (von https://github.com/RamiKrispin/coronavirus/tree/master/csv bezogen) zur Verfügung:
+
+- coronavirus.csv 
+- covid_19_vaccine.csv
+- world_population.csv
+
+Diese geben Corona-Fallzahlen und Impfungen auf Tagesbasis für verschiedene Länder an. Daraus wird der Datensatz covid_vaccine.csv erstellt, welcher die Datensätze zusammenfasst.
+
+Zusätzlich laden wir den Plotly-Countrycode-Datensatz, mit welchem wir Chloropleth-Plots erstellen können.
+
+DISCLAIMER: Die Daten scheinen oft nicht zu stimmen. Im Laufe der Mini-Challenge haben wir immer mehr gefunden. Es kann also sein, dass wir teilweise Resultate falsch interpretiert haben.
+
+#### Beschreibung des erstellten covid_vaccine
+
+- province - Name of province/state, for countries where data is provided split across multiple provinces/states
+- country - Name of country/region
+- lat - The latitude code of the country/region
+- long - The longitude code of the country/region
+- type - An indicator for the type of cases (confirmed, death, recovered)
+- cases - Number of cases on given date
+- population - Country or province population
+- continent_name - Continent name
+- doses_admin - Cumulative number of doses administered. When a vaccine requires multiple doses, each one is counted independently
+- people_partially_vaccinated - Cumulative number of people who received at least one vaccine dose. When the person receives a prescribed second dose, it is not counted twice
+- people_fully_vaccinated - Cumulative number of people who received all prescribed doses necessary to be considered fully vaccinated
+- CODE - Countrycode for Chloroplethmap
+
+## Code
+
+### Imports
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(plotly)
+library(ggplotlyExtra)
+library(ggplot2)
+library(esquisse)
+library(lubridate)
+library(geojsonR)
+```
+
+### Globale Parameter
+
+Da das R-Markdown eher lange ist und Probleme hat, wenn alle Plots im RStudio geöffnet sind, haben wir einen Parameter hinzugefügt, welcher das laden der Plots optional macht. So können wir alles ausführen und anschliessend gezielt einzelne Plots anschauen.
+
+Ausserdem haben wir auch für das Data Wrangling einen Parameter gesetzt. Wenn dieser auf FALSE gesetzt ist, wird das bereits erstellte csv wieder eingelesen.
+
+```{r}
+wrangle_data = FALSE
+show_plots = TRUE
+```
+
+
+### Einlesen der Daten
+
+```{r}
+if (wrangle_data) {
+vaccine <- read_csv('data/covid19_vaccine.csv')
+world_population <- read_csv('data/world_population.csv')
+covid <- read.csv('data/coronavirus.csv')
+country_code <- read.csv("https://raw.githubusercontent.com/plotly/datasets/master/2014_world_gdp_with_codes.csv")
+}
+```
+
+### Data-Wrangling
+
+Wandle das Datum zum Datentyp Datetime um.
+
+```{r}
+
+if (wrangle_data) {
+covid <- covid %>% 
+  mutate(date = ymd(date))
+}
+```
+
+Entferne Reihen mit einer negativen Anzahl Fällen.
+
+```{r}
+
+if (wrangle_data) {
+covid_filtered <- covid %>% 
+  select(date, country, type, cases, continent_name, population, lat, long, code3) %>%
+  filter(cases >= 0)
+}
+  
+```
+
+Entferne Reihen mit einer negativen Anzahl von geimpften Personen.
+
+```{r}
+
+if (wrangle_data) {
+vaccine_filtered <- vaccine %>% 
+ select(date, country_region, doses_admin, people_partially_vaccinated, people_fully_vaccinated, uid, combined_key, population, continent_name) %>%
+  filter(doses_admin >= 0, people_partially_vaccinated >= 0, people_fully_vaccinated >= 0) %>%
+  mutate(country = combined_key)
+}
+```
+
+#### Gruppieren zu Kalenderwochen
+Da wir im Verlaufe der Mini-Challenge Probleme mit der Datenmenge hatten (die Shiny-Plots und das Dashboard hatten lange Ladezeiten und Lagging-Probleme), gruppierten wir die Tagesbasierten Daten zu Kalenderwochen zusammen. So konnten wir die Daten von ursprünglich über 800'000 Observationen auf etwa 133'000 Observationen reduzieren. 
+
+```{r}
+if (wrangle_data) {
+country_data <- vaccine_filtered %>% 
+  select(country, country_region, uid, combined_key, population, continent_name)
+
+vaccine_filtered <- vaccine_filtered %>% 
+  select(country, date, people_partially_vaccinated, people_fully_vaccinated, doses_admin) %>%
+  mutate(calendar_week = strftime(date, format = "%V")) %>%
+  mutate(year = format(as.POSIXct(date, format="%Y-%m-%d"), format = "%Y")) %>%
+  mutate(date = paste(year, calendar_week, sep="-")) %>%
+  select(-year, -calendar_week) %>%
+  filter(!is.na(country)) %>%
+  group_by(country, date) %>%
+  summarise(people_fully_vaccinated = max(people_fully_vaccinated), people_partially_vaccinated = max(people_partially_vaccinated), doses_admin = max(doses_admin))
+
+
+vaccine_filtered <- merge(vaccine_filtered, country_data, by = c('country'), all.x = TRUE)
+vaccine_filtered <- distinct(vaccine_filtered)
+
+}
+```
+
+```{r}
+if (wrangle_data) {
+covid_filtered_temp <- covid_filtered %>%
+  select(country, lat, long, population, continent_name, code3)
+
+covid_filtered <- covid_filtered %>%
+  select(country, cases, type, date) %>%
+  mutate(calendar_week = strftime(date, format = "%V")) %>%
+  mutate(year = format(as.POSIXct(date, format="%Y-%m-%d"), format = "%Y")) %>%
+  mutate(date = paste(year, calendar_week, sep="-")) %>%
+  select(-year, -calendar_week) %>%
+  filter(!is.na(country)) %>%
+  group_by(date, country, type) %>%
+  summarise(cases = sum(cases))
+}
+```
+
+```{r}
+if (wrangle_data) {
+covid_filtered_temp <- distinct(covid_filtered_temp)
+covid_filtered <- merge(covid_filtered, covid_filtered_temp, by = c('country'), all.x = TRUE)
+covid_filtered <- distinct(covid_filtered)
+}
+```
+
+```{r}
+if (wrangle_data) {
+covid_vaccine <- merge(covid_filtered, vaccine_filtered, by = c('country', 'date', 'continent_name'), all.x = TRUE)
+
+covid_vaccine <- covid_vaccine %>% select(date, country, continent_name, type, population.x, cases, lat, long, country_region, doses_admin,people_partially_vaccinated, people_fully_vaccinated, code3) %>%
+  rename(population = population.x)
+}
+```
+
+#### Exportieren als neues csv 
+
+Exportiere das neu erstellte Dataframe covid_vaccine in ein CSV, damit später und an anderen Orten nur noch dieses eingelesen werden kann.
+
+```{r}
+
+if (wrangle_data) {
+write.csv(covid_vaccine, "covid_vaccine2.csv")
+}
+```
+
+Einlesen der Daten
+```{r}
+if (!wrangle_data) {
+covid_vaccine <- read.csv('data/covid_vaccine2.csv')
+country_code <- read.csv("https://raw.githubusercontent.com/plotly/datasets/master/2014_world_gdp_with_codes.csv")
+}
+```
+
+#### Hinzufügen des Ländercodes
+
+Um den Ländercode hinzuzfügen, mussten wenige Ländernamen noch umformuliert werden.
+
+```{r}
+covid_vaccine$country <- ifelse(covid_vaccine$country == "US", "United States", covid_vaccine$country)
+covid_vaccine$country <- ifelse(covid_vaccine$country == "Congo (Kinshasa)", "Congo, Democratic Republic of the", covid_vaccine$country)
+
+covid_vaccine <- left_join(covid_vaccine, country_code, by = c("country" = "COUNTRY"))
+```
+
+#### Behandeln von NA's
+
+NA's ersetzen wir durch die Zahlen 0.
+
+```{r}
+covid_vaccine <- covid_vaccine %>% 
+  replace_na(list(people_partially_vaccinated = 0, people_fully_vaccinated = 0, population = 0))
+```
+
+```{r}
+covid_vaccine <- covid_vaccine %>% 
+  filter(date != "2022-52", date != "2021-53")
+```
+
+
+#### Gesamtübersicht über die Länder
+
+Um eine Gesamtübersicht über die Länder zu erhalten, wird hier nach Länder gruppiert und die Summe der Tages- bzw. Wochenfälle berechnet. Daraus wird ein Dataframe erstellt.
+
+```{r warning=FALSE}
+covid_vaccine_country <- covid_vaccine %>% 
+  filter(type == 'confirmed') %>%
+  select(country, type, cases, doses_admin, people_partially_vaccinated, people_fully_vaccinated, CODE, population) %>%
+  group_by(country, type, CODE) %>%
+  summarise(total_cases = sum(cases), total_partially_vaccinated = max(people_partially_vaccinated), total_fully_vaccinated = max(people_fully_vaccinated), population = max(population))
+```
+
+Da bei Australien, den Philippinen der Niederlande und China die Bevölkerungszahlen nicht stimmen können, haben wir die momentane Bevölkerungsanzahl manuell gesetzt.
+
+```{r}
+covid_vaccine_country$population <- ifelse(covid_vaccine_country$country == "Australia", 25890773, covid_vaccine_country$population)
+covid_vaccine_country$population <- ifelse(covid_vaccine_country$country == "China", 1452735285 , covid_vaccine_country$population)
+covid_vaccine_country$population <- ifelse(covid_vaccine_country$country == "Netherlands", 17591394 , covid_vaccine_country$population)
+covid_vaccine_country$population <- ifelse(covid_vaccine_country$country == "Philippines", 109035343 , covid_vaccine_country$population)
+```
+
+Ausserdem wollen wir noch eine Übersicht über die verschiedenen Kontinente erstellen.
+
+```{r warning=FALSE}
+covid_total_continent <- covid_vaccine %>% 
+  select(continent_name, type, cases, date) %>%
+  group_by(continent_name, type, date) %>%
+  summarise(total_cases = sum(cases))
+```
+
+### Explorative Datenanalyse
+
+#### Zeitraum der Daten
+```{r}
+print(unique(covid_vaccine$date))
+print(length(unique(covid_vaccine$date)))
+```
+
+Unsere Daten erstrecken sich von der Kalenderwoche 4 im Jahr 2020 bis zur Kalenderwoche 47 im Jahr 2022. Dies ergibt einen Zeitraum von 149 Wochen.
+
+#### Verlauf der gesamten Fallzahlen
+
+```{r}
+p <- covid_vaccine %>%
+    ggplot(aes(x = date, y = cases)) +
+    geom_line(color = 'blue') + 
+    scale_y_continuous() +
+    labs(title = "Fallzahlen weltweit", 
+         y = "Anzahl Fälle", x = "Kalenderwoche") +
+    scale_x_discrete(guide = guide_axis(check.overlap = TRUE))
+
+
+
+if (show_plots) {
+  p
+  }
+```
+
+(Leider wurde mit ggplotly unser x-label-Format nicht richtig übernommen, daher zeigen wir hier einen normalen ggplot)
+
+Dieser Plot zeigt den weltweiten Verlauf der Fallzahlen von Covid. 
+
+#### Wie viele Ansteckungen gab es insgesamt weltweit?
+```{r warning=FALSE}
+covid_vaccine_calendar_week <- covid_vaccine %>%
+  filter(type == "confirmed") %>%
+  select(date, cases) %>%
+  group_by(date) %>%
+  summarise(cases_sum = sum(cases)) %>%
+  arrange(desc(cases_sum)) %>%
+  top_n(15)
+
+covid_vaccine_calendar_week$date <- as.vector(covid_vaccine_calendar_week$date)
+covid_vaccine_calendar_week$date <- factor(covid_vaccine_calendar_week$date, covid_vaccine_calendar_week$date)
+
+covid_total_per_week <- plot_ly(data = covid_vaccine_calendar_week,
+                                x = ~date,
+                                y = ~cases_sum,
+                                type = "bar") %>%
+                        layout(title = "Kalenderwochen mit den höchsten Fallzahlen",
+                             xaxis = list(title = 'Kalenderwoche'),
+                             yaxis = list(title = 'Anzahl Fälle'))
+if (show_plots) {
+  covid_total_per_week
+  }
+
+```
+
+In der Kalenderwoche 4 des Jahres 2022 gab es die meisten Infektionen weltweit. Spannend ist auch zu sehen, dass sich die Wochen von KW 52 im Jahr 2021 bis KW 15 im Jahr 2022 fast alle unter den top 15 befinden. In diesen Wochen sind die Zahlen also stark gestiegen und  auch nur langsam wieder abgeflacht. Dies war also der Höhepunkt der erfassten Pandemie. In der nächsten Visualiserung möchten wir die Fallzahlen auf Jahresbasis untersuchen.
+
+#### Welches war das Jahr mit den meisten Ansteckungen?
+```{r}
+covid_vaccine_year <- covid_vaccine %>%
+  filter(type == "confirmed") %>%
+  select(date, cases) %>%
+  mutate(year = str_split(date, "-", simplify = T)[,1]) %>%
+  group_by(year) %>%
+  summarise(cases_sum = sum(cases)) %>%
+  arrange(desc(cases_sum)) %>%
+  as.data.frame()
+
+covid_vaccine_year$year <- as.vector(covid_vaccine_year$year)
+covid_vaccine_year$year <- factor(covid_vaccine_year$year, covid_vaccine_year$year)
+
+covid_total_per_year <- plot_ly(data = covid_vaccine_year,
+                                x = ~year,
+                                y = ~cases_sum,
+                                type = "bar") %>%
+                        layout(title = "Fallzahlen pro Jahr",
+                             xaxis = list(title = 'Jahr'),
+                             yaxis = list(title = 'Fallzahlen'))
+if (show_plots) {
+  covid_total_per_year
+  }
+```
+
+Obwobl das Jahr 2022 noch nicht abgeschlossen ist und nur Daten bis zur Kalenderwoche 48 verfügbar sind, ist es das Jahr mit den meisten Covid-Fällen. 
+
+#### Wie viel Prozent der Weltbevölkerung sind geimpft (Stand 2022, KW 37)?
+
+```{r}
+vaccine_calendarweek_37 <- covid_vaccine %>%
+  filter(date == "2022-37") %>%
+  select(country, date, people_fully_vaccinated)
+
+vaccine_calendarweek_37 <- distinct(vaccine_calendarweek_37)
+
+vaccine_calendarweek_37 <- vaccine_calendarweek_37 %>%
+  group_by(date) %>%
+  summarise(people_fully_vaccinated = sum(people_fully_vaccinated)) %>%
+  mutate(people_fully_vaccinated = people_fully_vaccinated / 8030000000)
+
+print(vaccine_calendarweek_37$people_fully_vaccinated)
+
+```
+
+Etwa 58.6 Prozent der Weltbevölkerung sind vollständig gegen Covid19 geimpft. Die Bevölkerungszahl wurde dabei aus anderen Quellen manuell gesetzt.
+
+#### Welche Länder haben die meisten vollständig geimpften Personen?
+
+```{r message=FALSE, warning=FALSE}
+vaccine_country_sum <- covid_vaccine %>%
+  filter(type == "confirmed") %>%
+  select(country, people_fully_vaccinated) %>%
+  group_by(country) %>%
+  mutate(people_fully_vaccinated = max(people_fully_vaccinated)) %>%
+  as.data.frame()
+
+vaccine_country_sum <- distinct(vaccine_country_sum)
+
+vaccine_country_sum <- vaccine_country_sum %>%
+  arrange(desc(people_fully_vaccinated)) %>%
+  top_n(15)
+
+vaccine_country_sum$country <- as.vector(vaccine_country_sum$country)
+vaccine_country_sum$country <- factor(vaccine_country_sum$country, vaccine_country_sum$country)
+
+vaccine_country <- plot_ly(data = vaccine_country_sum,
+                                x = ~country,
+                                y = ~people_fully_vaccinated,
+                                type = "bar") %>%
+                        layout(title = "Vollständig geimpfte Personen pro Land",
+                             xaxis = list(title = 'Land'),
+                             yaxis = list(title = 'Vollständig geimpfte Personen'))
+if (show_plots) {
+  vaccine_country
+  }
+```
+
+China und Indien haben mit Abstand die meisten vollständig geimpften Personen. Dies natürlich aus dem Grund, dass dies die beiden Länder mit der grössten Bevölkerung sind. Auch sonst sind die in der Top-Liste vorkommenden Länder in einer sehr ähnlichen Reihenfolge wie die derzeitige Liste mit der bevölkerungsreichsten Länder. Auffallend ist aber, dass kein afrikanisches Land in dieser Liste ist: Obwohl Nigeria mit 177 Millionen Einwohner auf Platz 9 ist, kommt es hier nicht vor.
+
+#### In welchen Ländern gab es die meisten Todesfälle?
+```{r warning=FALSE}
+covid_country_death <- covid_vaccine %>%
+  filter(type == "death") %>%
+  select(country, cases) %>%
+  group_by(country) %>%
+  summarise(cases = sum(cases)) %>%
+  arrange(desc(cases)) %>%
+  top_n(15)
+
+covid_country_death$country <- as.vector(covid_country_death$country)
+covid_country_death$country <- factor(covid_country_death$country, covid_country_death$country)
+
+covid_total_death_per_country <- plot_ly(data = covid_country_death,
+                                x = ~country,
+                                y = ~cases,
+                                type = "bar") %>%
+                        layout(title = "Länder mit den meisten Todesfällen",
+                             xaxis = list(title = 'Land'),
+                             yaxis = list(title = 'Anzahl Todesfälle'))
+if (show_plots) {
+  covid_total_death_per_country
+  }
+```
+
+Hier können die Todeszahlen von Grossbritannien und Frankreich nicht stimmen. Ansonsten ist auffallend, dass Länder mit einer grösseren Bevölkerung logischerweise auch mehr Todesfälle hatten.
+
+#### Welche Länder haben seit Beginn der Datenaufzeichnung am wenigstens Corona Infektionen?
+```{r}
+covid_country_sum <- covid_vaccine %>%
+  filter(type == "confirmed") %>%
+  select(country, cases) %>% 
+  group_by(country) %>% 
+  mutate(cases = sum(cases)) %>%
+  as.data.frame()
+  
+covid_country_sum <- distinct(covid_country_sum) 
+ 
+covid_country_sum <- covid_country_sum %>%
+  arrange(cases) %>%
+  filter(cases != 0) %>%
+  slice(1:15)
+
+
+
+covid_country_sum$country <- as.vector(covid_country_sum$country)
+covid_country_sum$country <- factor(covid_country_sum$country, covid_country_sum$country)
+
+covid_total_cases_per_country <- plot_ly(data = covid_country_sum,
+                                x = ~country,
+                                y = ~cases,
+                                type = "bar") %>%
+                        layout(title = "Länder mit den wenigsten Corona Infektionen",
+                             xaxis = list(title = 'Land'),
+                             yaxis = list(title = 'Anzahl Infektionen'))
+if (show_plots) {
+  covid_total_cases_per_country
+  }
+```
+
+Hier sind einige lustige "Länder" zu sehen. Bei der MS Zandaam und der Diamond Princess handelt es sich um Kreuzfahrschiffe. Anonsten sind hier vor allem sehr kleine Länder (Tuvalu, Holy See) und Länder wie Nord Korea oder Chad, welche entweder wirklich keine oder sehr wenige Fälle hatten oder diese einfach nicht erfassten.
+
+#### Untersuchungen über die verschiedenen Kontinente
+
+```{r}
+p1 <- covid_total_continent %>%
+  ggplot(aes(x = date, 
+             fill = continent_name, 
+             weight = total_cases)) +
+  geom_bar() +
+  scale_fill_hue(direction = 1) +
+  labs(
+    x = "Datum",
+    y = "Anzahl Fälle",
+    title = "Fallzahlen nach Kontinenten",
+  ) +
+  theme_minimal() +
+  scale_x_discrete(guide = guide_axis(check.overlap=TRUE))
+
+p1 <- p1 + labs(fill = "Kontinente")
+
+if (show_plots) {
+  p1
+  }
+```
+
+
+(auch hier hatten wir wieder das Problem mit den x-labels mit ggplotly)
+
+Die Visualisierung zeigt die Fallzahlen über die Zeit, farblich aufteilt nach den verschiedenen Kontinenten. Auffallend ist, dass Asien trotz der mit Abstand grössten Bevölkerungsanzahl von über 4.5 Milliarden nicht den grössten Teil ausmacht. Dafür ist Nordamerika vor allem im Jahr 2021 sehr dominant, obwohl der Kontinent bevölkerungstechnisch auf Rang vier hinter Europa ist. Es ist auch überraschend, dass der Kontinent Ozeanien, welcher, abgesehen von der Antarktis, der Kontinent mit der kleinsten Bevölkerung, zu Beginn des Jahres 2022 einen so grossen Anteil an den gesamten Fallzahlen hat.
+
+
+#### Die Welt in Karten
+
+Als nächstes wollen wir die Fallzahlen und Impfquoten auf einer interaktiven Karte anzeigen. So können die Länder selber exploriert werden.
+
+##### Covid Fälle pro Land
+
+```{r}
+if (show_plots) {
+chloropleth_covid_cases<-  plotly::plot_ly(data = covid_vaccine_country, 
+                locations = ~CODE, 
+                z = ~total_cases, 
+                text = ~country, 
+                type = 'choropleth', 
+                colorscale = 'Reds',
+                zmin = 0,
+                zmax = 130000000) %>%
+  layout(title = 'Covid Fallzahlen pro Land', 
+         geo = list(scope = 'world', 
+                    projection = list(type = 'natural earth'), 
+                    showlakes = TRUE, 
+                    lakecolor = 'rgb(255, 255, 255)'))
+
+chloropleth_covid_cases <- chloropleth_covid_cases %>% colorbar(title = "Fallzahlen")
+
+chloropleth_covid_cases
+}
+```
+
+Da es sich hier um absolute Zahlen handelt, ist es wenig verwunderlich, dass die Länder mit den meisten Einwohnern auch die Länder mit den meisten Covid-Fällen sind. Dies haben wir bereits in einer vorherigen Analyse gesehen. Afrika war auffallend wenig von der Pandemie betroffen, wenn man die Zahlen anschaut. Zusätzlich wird der Effekt aber noch damit verstärkt, dass gerade in diesen Ländern die Fallzahlen nicht immer korrekt erfasst worden sind. 
+
+Bei Frankreich, Australien und Grossbritannien können die Zahlen nicht stimmen. Nach dem konsultieren anderer Quellen scheinen diese Zahlen massiv falsch zu sein.
+
+##### Impfquoten pro Land
+
+```{r warning=FALSE}
+if (show_plots) {
+chloropleth_vaccinequote <- plotly::plot_ly(data = covid_vaccine_country, 
+                locations = ~CODE, 
+                z = ~total_fully_vaccinated/population, 
+                text = ~country, type = 'choropleth', 
+                colorscale = list(c(0, 'rgb(255,114,118)'), 
+                                  list(1, 'rgb(124,252,0)'))) %>%
+  layout(title = 'Impfquoten der verschiedenen Länder', 
+         geo = list(scope = 'world', 
+                    projection = list(type = 'natural earth'), 
+                    showlakes = TRUE, 
+                    lakecolor = 'rgb(255, 255, 255)')) 
+
+chloropleth_vaccinequote <- chloropleth_vaccinequote %>% colorbar(title = "Impfquote")
+chloropleth_vaccinequote
+}
+```
+
+Man sieht hier schön, welche Länder um ein Durchimpfen der Bevölkerung bemüht waren und welche nicht. Fast das gesamte Afrika hat eine sehr niedrige Impfquote.  
+
+Hier scheinen einige Zahlen auch nicht zu stimmen: Die Niederlande und die Philippinen haben eine Impfquote von über 1.
+
+#### Impf-Verlauf gegen Fallzahlen
+
+Wir möchten untersuchen, wie sich die Impfungen auf die Coronafallzahlen auswirken. Wichtig zu betonen ist, dass wir lediglich die Anzahl Coronafälle mit der jeweiligen Anzahl geimpfter Personen untersuchen. Weitere wichtige Faktoren wie die Massnahmen, den politischen Willen Zahlen korrekt zu Veröffentlichen etc. werden nicht beachtet. Unsere Hypothese lautet: Dank den Impfstoffen und somit einer grossen Anzahl an geimpfter Personen, können die Fallzahlen gesenkt werden.
+
+
+```{r message=FALSE, warning=FALSE}
+people_fully_vaccinated <- covid_vaccine %>% 
+  filter(type == 'confirmed') %>%
+  group_by(date)  %>%
+  summarise(people_fully_vaccinated = unique(people_fully_vaccinated)) %>%
+  arrange(date)
+
+people_fully_vaccinated <- people_fully_vaccinated %>%
+  summarise(people_fully_vaccinated = sum(people_fully_vaccinated)) %>% 
+  filter(date < '2022-39') %>%
+  arrange(date)
+```
+
+```{r message=FALSE, warning=FALSE}
+people_partially_vaccinated <- covid_vaccine %>% 
+  filter(type == 'confirmed') %>%
+  group_by(date)  %>%
+  summarise(people_partially_vaccinated = unique(people_partially_vaccinated)) %>%
+  arrange(date)
+
+people_partially_vaccinated <- people_partially_vaccinated %>%
+  summarise(people_partially_vaccinated = sum(people_partially_vaccinated)) %>% 
+  filter(date < '2022-39') %>%
+  arrange(date)
+```
+
+```{r}
+worldwide <- covid_vaccine %>% 
+  filter(type == 'confirmed') %>%
+  group_by(date) %>% 
+  summarise(total_cases_covid = sum(cases), ) %>%
+  filter(date < '2022-39') %>%
+  arrange(date)
+```
+
+```{r}
+merged_temp <- merge(people_partially_vaccinated, people_fully_vaccinated, by = "date")
+```
+
+
+```{r}
+worldwide <- merge(worldwide, merged_temp, by = "date")
+```
+
+
+```{r}
+if (show_plots) {
+plotly::plot_ly(data = worldwide, 
+                x = ~date, 
+                y = ~total_cases_covid, 
+                type = 'scatter', 
+                mode = 'lines', 
+                name = 'Fälle') %>%
+  add_trace(y = ~people_fully_vaccinated, 
+            name = 'Vollständig geimpfte Personen', 
+            yaxis = 'y2') %>%
+  layout(title = 'Covid-Fallzahlen gegen Impfquote', 
+         xaxis = list(title = 'Datum'), 
+         yaxis = list(title = 'Fallzahlen'), 
+         yaxis2 = list(title = 'Anzahl vollständig geimpfte Personen', 
+                      overlaying = 'y', side = 'right'))
+}
+```
+
+Wie wir sehen können, müssen wir unsere Hypothese leider verwerfen: Wir sehen, dass trotz einer hohen Anzahl an geimpften Personen die weltweite Anzahl an Corona erkrankten Personen im Frühjahr 2022 enorm steigt. Dies liegt aber wahrscheinlich auch daran, dass an vielen Orten die Massnahmen nach dem Aufkommen der Impf-Möglichkeiten gemildert worden sind.
+
+#### Impf-Verlauf gegen Todesfälle
+
+Als nächstes möchten wir die Anzahl geimpfter Personen mit der Anzahl an Corona verstorbenen Personen vergleichen. Unsere Hypothese lautet, dass dank vielen vollständig geimpften Personen die Anzahl an Corona verstorbenen Personen sinken.
+
+```{r message=FALSE, warning=FALSE}
+people_fully_vaccinated_death <- covid_vaccine %>% 
+  filter(type == 'death') %>%
+  group_by(date)  %>%
+  summarise(people_fully_vaccinated = unique(people_fully_vaccinated)) %>%
+  arrange(date)
+
+people_fully_vaccinated_death <- people_fully_vaccinated_death %>%
+  summarise(people_fully_vaccinated = sum(people_fully_vaccinated)) %>% 
+  filter(date < '2022-39') %>%
+  arrange(date)
+```
+
+```{r message=FALSE, warning=FALSE}
+people_partially_vaccinated_death <- covid_vaccine %>% 
+  filter(type == 'death') %>%
+  group_by(date)  %>%
+  summarise(people_partially_vaccinated = unique(people_partially_vaccinated)) %>%
+  arrange(date)
+
+people_partially_vaccinated_death <- people_partially_vaccinated_death %>%
+  summarise(people_partially_vaccinated = sum(people_partially_vaccinated)) %>% 
+  filter(date < '2022-39') %>%
+  arrange(date)
+```
+
+```{r}
+worldwide_deaths <- covid_vaccine %>% 
+  filter(type == 'death') %>%
+  group_by(date) %>% 
+  summarise(total_cases = sum(cases), ) %>%
+  filter(date < '2022-39') %>%
+  arrange(date)
+```
+
+```{r}
+merged_temp_death <- merge(people_partially_vaccinated_death, people_fully_vaccinated_death, by = "date")
+```
+
+
+```{r}
+worldwide_deaths <- merge(worldwide_deaths, merged_temp_death, by = "date")
+```
+  
+  
+```{r}
+if (show_plots) {
+plotly::plot_ly(data = worldwide_deaths, 
+                x = ~date, 
+                y = ~total_cases, 
+                type = 'scatter', 
+                mode = 'lines', 
+                name = 'Tode') %>%
+  add_trace(y = ~people_fully_vaccinated, 
+            name = 'Vollständig geimpfte Personen', 
+            yaxis = 'y2') %>%
+  layout(title = 'Covid-Tode gegen Impfung', 
+         xaxis = list(title = 'Datum'), 
+         yaxis = list(title = 'Anzahl Tode'), 
+         yaxis2 = list(title = 'Anzahl vollständig geimpfte Personen', 
+                      overlaying = 'y', side = 'right'))}
+```
+
+Es ist aber eine deutliche Verminderung der Todesfälle dank der Impfung zu erkennen. Seit die Impfung eingeführt wurde, gab es keinen so hohen Peak mehr wie zu Beginn der Pandemie.
+
+##### Todesrate
+
+```{r}
+death_rate_cases <- worldwide_deaths$total_cases / worldwide$total_cases_covid
+
+death_rate_cases <- merge(worldwide_deaths, worldwide, by = "date")
+
+death_rate_cases$death_covid_cases <- death_rate_cases$total_cases / death_rate_cases$total_cases_covid
+
+death_rate_cases <- death_rate_cases[-c(3,4)]
+
+```
+
+
+```{r}
+if (show_plots) {
+plotly::plot_ly(data = death_rate_cases, 
+                x = ~date, 
+                y = ~death_covid_cases, 
+                type = 'scatter', 
+                mode = 'lines', 
+                name = 'Todesrate') %>%
+  add_trace(y = ~people_fully_vaccinated.y, 
+            name = 'Vollständig geimpfte Personen', 
+            yaxis = 'y2') %>%
+  layout(title = 'Todesrate', 
+         xaxis = list(title = 'Datum'), 
+         yaxis = list(title = 'Todesfälle geteilt durch Fallzahlen'), 
+         yaxis2 = list(title = 'Anzahl vollständig geimpfte Personen', 
+                      overlaying = 'y', side ='right'))
+}
+
+```
+
+Hier können wir nochmals sehen, wie die Todeszahlen in Abhängigkeit der Coronafälle Weltweit abnimmt mit einer zunehmenden Anzahl an geimpften Personen. Besonders beachtlich ist, dass die ersten beiden ‘kleinen’ Wellen im Frühjahr 2020, sehr viele Todesopfer bei vergleichsweise wenigen Coronaerkrankten hervorbrachten. Rund 16 Prozent aller Coronaerkrankten Personen starben ab den Folgen. Während es Ende 2020 nur noch rund 1% waren. Nach dem grossen Impfanstieg wurde die 1% Marke nie mehr geknackt und die Prozentuale mortalität sank. Hier wären weitere Untersuchungen wie Beispielsweise der Behandlungserkentnissen, Anzahl Beatmungsgeräte und anzahl besetzter Intensivbetten spannend.
+
+
+#### Untersuchungen Schweiz
+Als nächstes wollen wir untersuchen, wie es der Schweiz ergangen ist. Wie schneidet die Schweiz gegenüber der restlichen Welt ab? Wie sind die Zahlen der Schweiz im Verhältnis zu Ländern mit einer ähnlichen Population?
+
+
+```{r}
+covid_switzerland <- covid_vaccine %>% 
+  filter(country == 'Switzerland', cases >= 0, type == 'confirmed') %>%
+  filter(!(people_partially_vaccinated == 0 & date > '2021-04-07')) %>%
+  filter(!(people_fully_vaccinated == 0 & date > '2021-04-07')) %>%
+  arrange(date)
+```
+
+##### Fallzahlenverlauf der Schweiz
+
+```{r}
+if (show_plots) {
+plotly::plot_ly(data = covid_switzerland, 
+                x = ~date, y = ~cases, 
+                type = 'bar') %>%
+  layout(title = 'Covid-19-Verlauf in der Schweiz', 
+         xaxis = list(title = 'Datum'), 
+         yaxis = list(title = 'Anzahl Fälle pro Kalenderwoche'))}
+```
+
+Die Fallzahlen in der Schweiz verlaufen recht ähnlich wie die Fallzahlen der gesamten Welt. Ende 2021/Anfang 2022 war der Höhepunkt der Pandemie.
+
+##### Impfungen auf Fallzahlenverlauf der Schweiz
+
+Wir möchten nun genauer den Fallzahlenverlauf in der Schweiz untersuchen. Wir vermuten, dass auch in der Schweiz die Anzahl geimpfter Personen lediglich auf die Todeszahl und nicht auf die Ansteckungen Auswirkungen haben.
+
+```{r}
+if (show_plots) {
+plotly::plot_ly(data = covid_switzerland, 
+                x = ~date, 
+                y = ~cases, 
+                type = 'scatter', 
+                mode = 'lines', 
+                name = 'Fälle') %>%
+  add_trace(y = ~people_fully_vaccinated, 
+            name = 'Vollständig geimpfte Personen', 
+            yaxis = 'y2') %>%
+  layout(title = 'Fallzahlen gegen Impfquote in der Schweiz', 
+         xaxis = list(title = 'Datum'), 
+         yaxis = list(title = 'Fallzahlen pro Kalenderwoche'), 
+         yaxis2 = list(title = 'Anzahl geimpfte Personen', 
+        overlaying = 'y', side = 'right'))}
+```
+
+Wir sehen, dass auch mit einer hohen Impfquote ca. 80% der grosse Fallzahlen anstieg nicht verhindert werden konnte. Natürlich müsste man weitere wichtige Daten wie zum Beispiel die Massnahmen in die Untersuchungen miteinbeziehen.
+
+
+##### Vergleich zu ähnlichen Ländern bezügliche Population
+
+```{r}
+almost_switzerland <- covid_vaccine_country %>% 
+  filter(population >= 7500000 & population <= 9000000)
+
+
+fig <- plot_ly(data = almost_switzerland, 
+               x = ~country, 
+               y = ~population, 
+               type = 'bar', 
+               name = 'Gesamte Fallzahlen')
+fig <- fig %>% add_trace(y = ~total_fully_vaccinated, 
+                         name = 'Vollständig geimpfte Personen')
+fig <- fig %>% layout(yaxis = list(title = 'Anzahl Personen'),
+                      xaxis = list(title = 'Land'),
+                      barmode = 'group', 
+                      title = 'Vergleich zu ähnlichen Ländern')
+
+if (show_plots) {
+  fig
+  }
+```
+
+Wir sehen, dass die Anzahl geimpfter Personen pro Land sehr stark variieren. Die Schweiz hat nach Israel die 2. meisten Geimpften Personen. Dennoch sind die Fallzahlen über alle Länder ähnlich.
+
+#### Vergleich der Fallzahlen in China zum Rest der Welt
+
+
+Der erste bestätige Coronafall ereignete sich am 31. Dezember 2019 in Wuhan in China. Nach dem Ausbruch der Pandemie hat China eine eigene Linie gefunden, welcher sie noch bis vor kurzem treu geblieben sind, nämlich die 0 Covid Strategie. Sobald irgendwo in China eine neue Infektion durch Covid-19 gemeldet wurde, wurden ganze Stadtteile oder falls nötig sogar ganze Städte abgeriegelt.
+Wir möchten untersuchen, ob die Corona Strategie Chinas sich auf die Fallzahlen sowie Todesfälle ausgewirkt hat im Vergleich zum Rest der Welt. Weiter möchten wir auch aufzeigen, wie lange es gedauert hat, bis China die Fälle reduzieren konnte mit der null Covid Strategie im Vergleich zum Rest der Welt.
+
+
+Dazu betrachten wir zuerst einmal die Fallzahlen in China über die gesamte Dauer von Anfang 2020 bis ende 2022.
+
+```{r}
+covid_vacine_china <- covid_vaccine %>%
+  filter(country == 'China')
+fig_cases_china <-  plot_ly(data = covid_vacine_china,
+                      x = ~date, 
+                      y = ~cases, 
+                      name="Cases China", 
+                      type="bar",
+                      hoverinfo="text"
+                      ) %>%
+    layout(title = 'Covid-19 in China', 
+         xaxis = list(title = 'Kalenderwoche'), 
+         yaxis = list(title = 'Anzahl Fälle in China'))
+
+if (show_plots) {
+  fig_cases_china
+  }
+```
+
+Als nächstes betrachten wir die Fallzahlen von China im Vergleich zum Rest der Welt.
+
+```{r message=FALSE, warning=FALSE}
+covid_vacine_china_vs_rest <- covid_vaccine %>%
+  mutate(china =  case_when(country == "China" ~"China",
+                    country != "China" ~"Rest of the world"))
+fig_rest_world <-  plot_ly(data = covid_vacine_china_vs_rest,
+                      x = ~date, 
+                      y = ~cases,
+                      color = ~china,
+                      name= ~china, 
+                      type="bar", 
+                      hoverinfo="text"
+                      ) %>%
+                      layout(title = "Fallzahlen China vs Rest der Welt",
+                             xaxis = list(title = 'Kalenderwoche'),
+                             yaxis = list(title = 'Anzahl Fälle'),
+                             barmode = "stack")
+if (show_plots) {fig_rest_world}
+```
+
+Es ist beeindruckend wie wenig bestätigte Fälle China über die Zeit vom `r min(covid_vacine_china$date)` bis zum `r max(covid_vacine_china$date)` im Vergleich zu der Rest der Welt gehabt hat. Besonders spannend ist zu beobachten wie wenig Fälle China vom 21.05.2020 bis zum 31.01.2022 hatten. Vergleicht man diese Periode zum Rest der Welt, bleiben die Fälle in China nämlich fast konstant bei null über mehr als 1.5 Jahre. 
+Beim Rest der Welt sehen wir, eine Art Wellenform, denn alle zwei Monate wiederholt sich ein Muster, bei dem die Fälle ansteigen und nach etwa einem Monat wieder sinken.
+
+
+Um nun nicht nur die Verläufe miteinander zu vergleichen sondern auch die Effektiven Fallzahlen normalisieren wir die Fallzahlen mit den Einwohner Chinas (1.4 Milliarden, Stand 2021, Quelle: https://datacommons.org/place/country/CHN?utm_medium=explore&mprop=count&popt=Person&hl=de) und den Einwohner der Rest der Welt (7.836 Milliarden-1.4 Milliarden = 6.436 Milliarden, Stand 2021, Quelle: https://datacommons.org/place/Earth?utm_medium=explore&mprop=count&popt=Person&hl=de).
+Es wäre auch möglich, das Attribut population aus dem Data Frame zu verwenden, jedoch ist dieses Attribut für China zu ungenau.
+
+Normalisieren der Fallzahlen aus dem Rest der Welt sowie China
+
+```{r message=FALSE, warning=FALSE}
+covid_vacine_norm <- covid_vaccine %>%
+  mutate(separate_china = case_when(country == "China" ~"China",
+                             country != "China" ~"Rest of the world")) %>%
+  filter(type == "confirmed") %>%
+  select(date, cases, separate_china) %>%
+  group_by(date, separate_china) %>%
+  summarise(cases_sum = sum(cases)) %>%
+  mutate(cases_norm = case_when(separate_china == "China" ~cases_sum/1.4,
+                               separate_china == "Rest of the world" ~cases_sum/6.436))
+fig_cases_compare_norm <- covid_vacine_norm %>%
+                          plot_ly(x = ~date,
+                                  y = ~cases_norm,
+                                  color = ~separate_china,
+                                  name = ~separate_china,
+                                  type = "bar",
+                                  hoverinfo = "test") %>%
+  layout(title = "Fallzahlen China vs Rest der Welt (normalisiert)",
+                             xaxis = list(title = 'Kalenderwoche'),
+                             yaxis = list(title = 'Anzahl Fälle (normalisiert)'),
+                             barmode = "stack")
+if (show_plots) {
+  fig_cases_compare_norm
+  }
+```
+Hier sehen wir noch einmal schön, wie wenig Fälle China im Vergleich zum Rest der Welt über den ganzen Zeitraum, seit dem Beginn der Erhebung der Daten bis heute hatte. Nur wenn wir die Daten ganz zu Beginn betrachten, sehen wir, dass China beim Ausbruch mehr registrierte Fälle hatte.
+Nun untersuchen wir noch, ob es in China vielleicht mehr Todesfälle gegeben hat, im Vergleich zum Rest der Welt.
+
+```{r message=FALSE, warning=FALSE}
+covid_vacine_death_norm <- covid_vaccine %>%
+  mutate(separate_china = case_when(country == "China" ~"China",
+                             country != "China" ~"Rest of the world")) %>%
+  filter(type == "death") %>%
+  select(date, cases, separate_china) %>%
+  group_by(date, separate_china) %>%
+  summarise(cases_sum = sum(cases)) %>%
+  mutate(cases_norm = case_when(separate_china == "China" ~cases_sum/1.4,
+                               separate_china == "Rest of the world" ~cases_sum/6.436))
+fig_death_compare_norm <- covid_vacine_death_norm %>%
+                          plot_ly(x = ~date,
+                                  y = ~cases_norm,
+                                  color = ~separate_china,
+                                  name = ~separate_china,
+                                  type = "bar",
+                                  hoverinfo = "test") %>%
+  layout(title = "Anzahl Tode China vs Rest der Welt (normalisiert)",
+                             xaxis = list(title = 'Kalenderwoche'),
+                             yaxis = list(title = 'Anzahl Todesfälle (normalisiert)'),
+                             barmode = "stack")
+if (show_plots) {fig_death_compare_norm}
+```
+Auch hier sehen wir einen klaren Trend, der zeigt, dass China auch bei den Todesfällen die Nase vorne hat.
+
+Die Frage ist, lässt sich dies auf die Impfungen zurückschliessen?
+Dazu untersuchen wir den Impfverlauf von China und dem Rest der Welt, denn wir haben bereits in früheren Visualisierungen gesehen, dass die Impfquote sich auf die Todesfälle ausgewirkt hat.
+
+```{r message=FALSE, warning=FALSE}
+covid_vaccine_china <- covid_vacine_china_vs_rest %>%
+  filter(china == "China")
+covid_vaccine_rest_of_the_world <- covid_vacine_china_vs_rest %>%
+  filter(china == "Rest of the world") %>%
+  select(-country, -country_region, -CODE, -continent_name, -china) %>%
+  group_by(date) %>%
+  summarise(cases = sum(cases), people_partially_vaccinated = sum(people_partially_vaccinated), people_fully_vaccinated = sum(people_fully_vaccinated))
+vaccine_line <- plot_ly(data = head(covid_vaccine_rest_of_the_world, -10),
+                          x = ~date ,
+                          y = ~people_fully_vaccinated,
+                          name = "Vollständig geimpft, Rest der Welt") %>%
+                add_trace(data = head(covid_vaccine_china, -10),
+                          x = ~date ,
+                          y = ~people_fully_vaccinated,
+                          name = "Vollständig geimpft, China") %>%
+                layout(title = "Impfungen China vs Rest der Welt",
+                             xaxis = list(title = 'Kalenderwoche'),
+                             yaxis = list(title = 'Anzahl geimpfte Personen'),
+                             barmode = "stack")
+if (show_plots) {
+  vaccine_line
+  }
+```
+In China wurde die Impfung nach diesen Daten wahrscheinlich später zugelassen, denn die Impfzahlen stiegen in China im Vergleich zum Rest der Welt etwas später an. Jedoch steigen sie ab diesem Zeitpunkt schneller an als im Rest der Welt, denn im Frühjahr 2022 stagnieren die Impfzahlen in China auf einem Rekordhoch, welche im Rest der Welt bis heute nicht erreicht wurde.
+Nun möchten wir noch herausfinden, wie viel in Prozent den von der chinesischen Bevölkerung geimpft sind im Vergleich zum Rest der Welt.
+
+
+```{r}
+covid_vaccine_china_vaccine <- covid_vaccine %>%
+  filter(country == "China" & type == "confirmed") %>%
+  select(date, people_partially_vaccinated, people_fully_vaccinated) %>%
+  group_by(date) %>%
+  summarise(people_partially_vaccinated = (mean(people_partially_vaccinated) / 1400000000), people_fully_vaccinated = (mean(people_fully_vaccinated) / 1400000000))
+covid_vaccine_rest_of_the_world_vaccine <- covid_vaccine %>%
+  filter(country != "China" & type == "confirmed") %>%
+  select(date, people_partially_vaccinated, people_fully_vaccinated) %>%
+  group_by(date) %>%
+  summarise(people_partially_vaccinated = (sum(people_partially_vaccinated) / 6346000000), people_fully_vaccinated = (sum(people_fully_vaccinated) / 6346000000))
+vaccine_line_norm <- plot_ly(data = head(covid_vaccine_rest_of_the_world_vaccine, -10),
+                          x = ~date ,
+                          y = ~people_fully_vaccinated,
+                          name = "Geimpfte Personen (Rest der Welt)",
+                          type = "scatter",
+                          mode = "lines") %>%
+                add_trace(data = head(covid_vaccine_china_vaccine, -10),
+                          x = ~date ,
+                          y = ~people_fully_vaccinated,
+                          name = "Geimpfte Personen (China)",
+                          mode = "lines") %>%
+                layout(title = "Impfrate China vs. Rest der Welt",
+                             xaxis = list(title = 'Kalenderwoche'),
+                             yaxis = list(title = 'Impfrate'))
+if (show_plots) {
+  vaccine_line_norm
+  }
+```
+In China wurden die ersten später geimpft im Vergleich der Rest der Welt. Jedoch holt China schnell auf und hat auch schon bald die Nase vorne. Wir sehen, dass in China am Ende die Impfquote etwa 25% höher ist als im Rest der Welt.
+
+#### Interaktive Weltkarte mit den aktuellen Fallzahlen sowie gesamten Fallzahlen
+Hier eine Interaktive Weltkarte mit den 7 Tage Inzidenzen in allen Ländern, dies sollte auch die Farbskala des jeweiligen Land bestimmen. Neben den 7 Tage Inzidenz sollte man die Gesamten Corona Fallzahlen sowie Teil und Vollständige Impfungen des jeweiligen Land herauslesen können.
+
+
+```{r}
+covid_vaccine_country_data_temp <- covid_vaccine %>%
+  select(country, CODE)
+covid_vaccine_country_data_confirmed <- covid_vaccine %>%
+  select(country, type, cases) %>%
+  filter(type == "confirmed") %>%
+  select(country, cases) %>%
+  group_by(country) %>%
+  summarise(cases_confirmed = sum(cases))
+covid_vaccine_country_data_death <- covid_vaccine %>%
+  select(country, type, cases) %>%
+  filter(type == "death") %>%
+  select(country, cases) %>%
+  group_by(country) %>%
+  summarise(cases_death = sum(cases))
+  
+covid_vaccine_country_data_revovery <- covid_vaccine %>%
+  select(country, type, cases) %>%
+  filter(type == "recovery") %>%
+  select(country, cases) %>%
+  group_by(country) %>%
+  summarise(cases_recovery = sum(cases))
+covid_vaccine_country_data_sevendays <- covid_vaccine %>%
+  select(country, date, cases, type) %>%
+  filter(type == "confirmed") %>%
+  select(country, date, cases) %>%
+  mutate(year = strtoi(str_split(date, "-", simplify = T)[,1])) %>%
+  mutate(calendar_week = strtoi(str_split(date, "-", simplify = T)[,2])) %>%
+  select(-date) %>%
+  filter(year == 2022, calendar_week == 47) %>% # aktuelle Woche mit strtoi(strftime(Sys.Date(), format = "%V"))-1
+  select(country, cases) %>%
+  rename(sevendays_cases = cases)
+  
+covid_vaccine_country_data_sevendays <- distinct(covid_vaccine_country_data_sevendays)
+df_list <- list(covid_vaccine_country_data_temp, covid_vaccine_country_data_confirmed, covid_vaccine_country_data_death, covid_vaccine_country_data_revovery, covid_vaccine_country_data_sevendays)
+covid_vaccine_world_summary_country <- df_list %>% 
+  reduce(full_join, by='country')
+covid_vaccine_world_summary_country <- distinct(covid_vaccine_world_summary_country)
+covid_vaccine_world_summary_country <- as.data.frame(covid_vaccine_world_summary_country)
+```
+
+```{r}
+covid_vaccine_world_summary_country$hover <- covid_vaccine_world_summary_country %>%
+                                              with(paste(country, "<br>",
+                                              "Seven days incidence:",sevendays_cases,"<br>",
+                                              "Sum Cases:",cases_confirmed,"<br>",
+                                              "Sum Recovery:",cases_recovery,"<br>", 
+                                              "Sum death:",cases_death))
+```
+
+#### Weltkarte mit allen Daten welche oben beschrieben wurden
+```{r}
+choropleth_map_world_summary <- plot_ly(data = covid_vaccine_world_summary_country,
+                                        type = "choropleth", 
+                                        hovertext = ~hover,
+                                        locations = ~CODE,
+                                        z = ~sevendays_cases,
+                                        color = ~sevendays_cases) %>%
+                                layout(title = 'Covid-Overview of the world', 
+                                        geo = list(scope = 'world', 
+                                        projection = list(type = 'natural earth'), 
+                                        showlakes = TRUE, 
+                                        lakecolor = 'rgb(255, 255, 255)')) 
+
+choropleth_map_world_summary <- choropleth_map_world_summary %>% colorbar(title = "7-Tage-Inzidenz")
+
+if (show_plots) {
+  choropleth_map_world_summary
+  }
+```
+
+Folgende Daten sind in dieser Karte ersichtlich:
+7 Tage Inzidenzen (Summe der Neuansteckungen der letzten sieben Tage, die Farbe zeigt auch die Höhe dieser Inzidenz an)
+sum_cases: Summe der Fallzahlen seit Beginn der Datenerhebung im jeweiligen Land
+cases_recovery: Summe der Personen, welche sich mit Covid indiziert haben und sich erholt haben seit Beginn der Datenerhebung
+sum_death: Summe der Todesfälle seit Beginn der Datenerhebung
+
+## Fazit
+
+### Plotly
+
+Interaktive Visualisierungen sind mit den Libraries ggplotly, esquisser und ggplot sehr einfach und intuitiv zu erstellen. Zudem stellt es keinen Mehraufwand zu normalen ggplots dar. Mit der Library ggplotly ist man lediglich in einigen Optionen eingeschränkt. Bemerkt haben wir dies bei überlappenden Länder-Labels, welche mit ggplot2 bereinigt werden konnten, jedoch diese Änderungen mit ggplotly nicht übernommen wurden.
+Des Weiteren ist die Performance schlechter mit Interaktivenplots. Dieses Problem konnten wir mit einer If-Schleife teilweise lösen.
+Zudem kann der code geknitted werden und anschliessend is einem html-file im Browser flüssig analysiert werden.
+
+### Shiny
+
+Der Aufbau eines Shiny Dashboards wird durch die gute Shiny Dokumentation und intuitive Code Struktur relativ schnell ermöglicht. Viele Bausteine wie Slider, Checkboxen oder Auswahlmöglichkeiten stehen für Userinputs zur verfügbar und können mit einer Zeile Code implementiert werden. Vorteilhaft ist auch dass der grösste Teil direkt in R programmiert werden kann, dadurch lassen sich die Plots aus dem Notebook sehr schnell einfügen. Ein wohl nicht nur Shiny betreffendes Problem ist die Performance. Dashboards oder Webapplikationen sollen ohne grosse Verzögerungen Daten und Plots anzeigen können. Das ist nicht immer einfach, R Shiny bietet hier die Möglichkeit reaktive Funktionen zu verwenden, diese reduziert das Laden von Daten und Plots, wenn keine Inputänderungen stattgefunden haben. Selbst bei kleinen Applikationen ist es wohl sinnvoll reaktive Funktion zu verwenden. 
+Etwas mühsam war die Fehlersuche. Es wird zwar R-Code verwendet, dennoch finden die einzelnen Elementtrennung durch viele Kommas und Klammern statt. Fehlt ein Komma oder Klammer ist die Unterstützung von R-Studio zur Fehlersuche nicht sehr hilfreich. Zudem scheint es einen Bug für Umlaute zu geben, werden `ä, ö, ü` bei Plotbeschriftungen verwendet kommt es vor, dass die Fehelermeldung zu fehlenden Komma oder Klammern erscheint. Ein Reload der Applikation reicht nicht aus, nur ein Neustart behebte das Problem. Fehler wurden dadurch öfter an der falschen Stelle gesucht und hat einiges an Zeit verschlungen. Es empfiehlt sich also nur jeweils kleine Änderungen vorzunehmen und diese zu testen. Des weiteren war es etwas aufwendig die Änderungen im Notebook in die Webapplikation zu übertragen. Beim nächsten Mal könnte versucht werden, die Filterung der Daten und erstellen der Plots im Notebook in ein Funktion File auszulagern. Damit würden Änderungen an beiden Orten stattfinden.
+
+#### styler  
+Alle Files wurden mit [styler](https://styler.r-lib.org/) Code-Guidelines geprüft. Die Verwendung von `styler` ist einfach und sollte vor jedem Commit ausgeführt werden.
